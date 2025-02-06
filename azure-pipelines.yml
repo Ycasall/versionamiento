@@ -1,0 +1,104 @@
+trigger:
+- main
+
+pool:
+  name: Local-Agent-Pool 
+
+variables:
+  imageName: 'hola-mundo-app'
+  imageTag: '1.0'
+  dockerRegistry: 'juancifu31'
+  k8sNamespace: 'default'
+  containerRegistry: 'docker-hub-connection'
+  Dockerfile: '**/Dockerfile'  
+stages:
+- stage: Build
+  displayName: 'Construir aplicación'
+  jobs:
+
+  - job: BuildApp
+    steps:
+    - script: |
+        echo "Construyendo la aplicación..."
+        docker build -t $(imageName):$(imageTag) .
+      displayName: 'Construir imagen Docker'
+
+- stage: Test
+  displayName: 'Ejecutar pruebas unitarias'
+  dependsOn: Build
+  jobs:
+  - job: RunTests
+    steps:
+    - script: |
+        echo "Ejecutando pruebas unitarias..."
+        # Aquí puedes agregar comandos para ejecutar pruebas (ejemplo: Jest, Mocha)
+      displayName: 'Pruebas unitarias'
+
+# - stage: SonarQube
+#   displayName: 'Análisis de calidad con SonarQube'
+#   dependsOn: Test
+#   jobs:
+#   - job: SonarAnalysis
+#     steps:
+#     - task: SonarQubePrepare@5
+#       inputs:
+#         SonarQube: '<sonarqube-service-connection>'
+#         scannerMode: 'CLI'
+#         configMode: 'manual'
+#         cliProjectKey: 'hola-mundo-app'
+#         cliProjectName: 'Hola Mundo App'
+#         extraProperties: |
+#           sonar.sources=.
+#           sonar.language=web
+#           sonar.sourceEncoding=UTF-8
+#     - script: |
+#         echo "Ejecutando análisis de SonarQube..."
+#         sonar-scanner
+#       displayName: 'Ejecutar SonarQube'
+#     - task: SonarQubePublish@5
+#       inputs:
+#         pollingTimeoutSec: '300'
+
+- stage: Docker
+  displayName: 'Construir y subir imagen Docker'
+  #dependsOn: SonarQube
+  jobs:
+  - job: BuildAndPushDocker
+    steps:
+    - script: |
+        echo "Logging in to Docker Hub..."
+        echo "$DOCKER_PASSWORD" | docker login -u "$DOCKER_USERNAME" --password-stdin
+      displayName: 'Login to Docker Hub'
+      env:
+        DOCKER_USERNAME: $(USER)
+        DOCKER_PASSWORD: $(PASSWORD)      
+    - script: |
+        echo "Etiquetando imagen Docker..."
+        docker tag $(imageName):$(imageTag) $(dockerRegistry)/$(imageName):$(imageTag)
+      displayName: 'Etiquetar imagen Docker'  
+    - script: |
+        echo "Subiendo imagen a Docker Registry..."
+        docker push $(dockerRegistry)/$(imageName):$(imageTag)
+      displayName: 'Subir imagen a Docker Registry'
+
+- stage: Deploy
+  displayName: 'Desplegar en Kubernetes'
+  dependsOn: Docker
+  jobs:
+  - job: DeployToKubernetes
+    steps:
+    - script: |
+        kubectl get po --all-namespaces
+        kubectl apply -f ./deployment/deployment_app.yaml
+- stage: TestConnectivity
+  displayName: 'Probar conectividad'
+  dependsOn: Deploy
+  jobs:
+  - job: TestConnection
+    steps:
+    - script: |
+        echo "Probando conectividad con curl..."
+        MINIKUBE_IP=$(minikube ip)
+        echo "##vso[task.setvariable variable=minikubeIp]$MINIKUBE_IP"
+        curl http://$MINIKUBE_IP:30001
+      displayName: 'Prueba de conectividad'
